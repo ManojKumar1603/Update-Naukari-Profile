@@ -37,10 +37,19 @@ def update_naukri_resume():
         page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
 
-        # ❗ Session validation
-        if "login" in page.url:
-            page.screenshot(path="session_expired.png", full_page=True)
-            raise Exception("Session expired. Regenerate auth.json")
+        # 📸 debug screenshot always
+        page.screenshot(path="debug_page.png", full_page=True)
+
+        print("Current URL:", page.url)
+        print("Page title:", page.title())
+
+        # ❗ Detect login failure properly
+        if "login" in page.url or "nlogin" in page.url:
+            raise Exception("Session invalid — redirected to login")
+
+        # ❗ Also check if profile element exists
+        if not page.locator(".fullname").count():
+            raise Exception("Not logged in — profile not loaded")
 
         print("Fetching profile name...")
         page.wait_for_selector(".fullname", timeout=60000)
