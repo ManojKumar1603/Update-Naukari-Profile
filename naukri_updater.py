@@ -76,13 +76,13 @@ def update_naukri_resume(username, password):
             print("Launching with real Chrome...")
             browser = p.chromium.launch(
                 executable_path=chrome_path,
-                headless=False,
+                headless=True,
                 args=launch_args
             )
         else:
             print("Launching with bundled Chromium...")
             browser = p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=launch_args
             )
 
