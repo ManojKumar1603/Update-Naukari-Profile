@@ -2,9 +2,9 @@ name: Update Naukri Profile
 
 on:
   schedule:
-    - cron: '0 16 * * *'   # 7:00 AM IST daily
-    - cron: '30 7 * * *'   # 1:00 PM IST daily
-  workflow_dispatch:         # Manual trigger from GitHub UI
+    - cron: '30 1 * * *'   # 7:00 AM IST
+    - cron: '30 7 * * *'   # 1:00 PM IST
+  workflow_dispatch:
 
 jobs:
   update-naukri:
@@ -24,17 +24,24 @@ jobs:
           python -m pip install playwright==1.51.0
           python -m playwright install chromium
 
-      - name: Run Naukri updater
-        env:
-          NAUKRI_USERNAME: ${{ secrets.NAUKRI_USERNAME }}
-          NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
+      # 🔐 Recreate auth.json from secret
+      - name: Create auth.json
         run: |
-          python naukri_updater.py --username "$env:NAUKRI_USERNAME" --password "$env:NAUKRI_PASSWORD"
+          $bytes = [System.Convert]::FromBase64String("$env:AUTH_JSON")
+          [System.IO.File]::WriteAllBytes("auth.json", $bytes)
+        shell: pwsh
+        env:
+          AUTH_JSON: ${{ secrets.AUTH_JSON }}
+
+      - name: Run Naukri updater
+        run: |
+          python naukri_updater.py
         shell: pwsh
 
-      - name: Upload screenshots on failure
-        if: failure()
+      # 📸 Always upload screenshots (success + failure)
+      - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
+          name: screenshots
           path: '*.png'
