@@ -1,0 +1,40 @@
+name: Update Naukri Profile
+
+on:
+  schedule:
+    - cron: '50 3 * * *'   # 7:00 AM IST daily
+    - cron: '30 7 * * *'   # 1:00 PM IST daily
+  workflow_dispatch:         # Manual trigger from GitHub UI
+
+jobs:
+  update-naukri:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install playwright==1.51.0
+          python -m playwright install chromium
+
+      - name: Run Naukri updater
+        env:
+          NAUKRI_USERNAME: ${{ secrets.NAUKRI_USERNAME }}
+          NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
+        run: |
+          python naukri_updater.py --username "$env:NAUKRI_USERNAME" --password "$env:NAUKRI_PASSWORD"
+        shell: pwsh
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: '*.png'
