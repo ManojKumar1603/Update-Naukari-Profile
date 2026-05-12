@@ -53,34 +53,116 @@ def update_naukri_resume():
         """)
 
         # -------------------------------------------------------
-        # STEP 1 — Login fresh
+        # STEP 1 — Login
         # -------------------------------------------------------
         print("Navigating to Naukri login page...")
-        page.goto("https://www.naukri.com/nlogin/login", wait_until="domcontentloaded")
+        page.goto("https://www.naukri.com/nlogin/login", wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(3000)
 
         page.screenshot(path="login_page.png", full_page=True)
-        print("Current URL:", page.url)
+        print("Login page URL:", page.url)
+        print("Login page title:", page.title())
 
-        print("Entering email...")
-        page.locator("#usernameField").fill(email)
+        # Print all input fields found on page for debugging
+        inputs = page.locator("input").all()
+        print(f"Found {len(inputs)} input fields on login page:")
+        for i, inp in enumerate(inputs):
+            try:
+                print(f"  input[{i}] id='{inp.get_attribute('id')}' name='{inp.get_attribute('name')}' type='{inp.get_attribute('type')}' placeholder='{inp.get_attribute('placeholder')}'")
+            except Exception:
+                pass
+
+        # Try multiple selectors for email field
+        email_selectors = [
+            "#usernameField",
+            "input[placeholder*='Email']",
+            "input[placeholder*='email']",
+            "input[type='email']",
+            "input[name='username']",
+            "input[id*='username']",
+            "input[id*='email']",
+        ]
+
+        email_filled = False
+        for selector in email_selectors:
+            try:
+                if page.locator(selector).count() > 0:
+                    page.locator(selector).first.fill(email)
+                    print(f"Email entered using selector: {selector}")
+                    email_filled = True
+                    break
+            except Exception:
+                continue
+
+        if not email_filled:
+            page.screenshot(path="login_failed.png", full_page=True)
+            raise Exception("Could not find email input field. Check login_page.png for the actual page.")
+
         page.wait_for_timeout(500)
 
-        print("Entering password...")
-        page.locator("#passwordField").fill(password)
+        # Try multiple selectors for password field
+        password_selectors = [
+            "#passwordField",
+            "input[placeholder*='Password']",
+            "input[placeholder*='password']",
+            "input[type='password']",
+            "input[name='password']",
+            "input[id*='password']",
+        ]
+
+        password_filled = False
+        for selector in password_selectors:
+            try:
+                if page.locator(selector).count() > 0:
+                    page.locator(selector).first.fill(password)
+                    print(f"Password entered using selector: {selector}")
+                    password_filled = True
+                    break
+            except Exception:
+                continue
+
+        if not password_filled:
+            page.screenshot(path="login_failed.png", full_page=True)
+            raise Exception("Could not find password input field. Check login_page.png for the actual page.")
+
         page.wait_for_timeout(500)
 
-        print("Clicking login button...")
-        page.locator("button[type='submit']").click()
+        # Take screenshot before clicking login
+        page.screenshot(path="before_login_click.png", full_page=True)
+
+        # Try multiple selectors for login button
+        login_button_selectors = [
+            "button[type='submit']",
+            "button:has-text('Login')",
+            "button:has-text('Sign in')",
+            "input[type='submit']",
+            ".loginButton",
+            "#login-submit",
+        ]
+
+        login_clicked = False
+        for selector in login_button_selectors:
+            try:
+                if page.locator(selector).count() > 0:
+                    page.locator(selector).first.click()
+                    print(f"Login button clicked using selector: {selector}")
+                    login_clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not login_clicked:
+            raise Exception("Could not find login button.")
 
         # Wait for redirect after login
-        page.wait_for_timeout(6000)
+        page.wait_for_timeout(8000)
         page.screenshot(path="after_login.png", full_page=True)
         print("URL after login:", page.url)
+        print("Title after login:", page.title())
 
         # Detect login failure
         if "nlogin" in page.url or "login" in page.url:
-            raise Exception("Login failed — wrong email/password or Naukri is showing a captcha. Check after_login.png.")
+            raise Exception("Login failed — wrong credentials or captcha appeared. Check after_login.png.")
 
         print("Login successful!")
 
@@ -88,12 +170,12 @@ def update_naukri_resume():
         # STEP 2 — Go to profile page
         # -------------------------------------------------------
         print("Opening profile page...")
-        page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded")
+        page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
         page.screenshot(path="profile_page.png", full_page=True)
-        print("Current URL:", page.url)
-        print("Page title:", page.title())
+        print("Profile URL:", page.url)
+        print("Profile title:", page.title())
 
         if "Access Denied" in page.title() or "access denied" in page.title().lower():
             raise Exception("Access Denied on profile page. Check profile_page.png.")
@@ -123,7 +205,7 @@ def update_naukri_resume():
         print(f"Resume downloaded: {resume_path}")
 
         # -------------------------------------------------------
-        # STEP 4 — Upload resume (triggers "profile updated" on Naukri)
+        # STEP 4 — Upload resume
         # -------------------------------------------------------
         print("Uploading resume...")
         try:
