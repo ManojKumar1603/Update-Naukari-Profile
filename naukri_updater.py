@@ -3,7 +3,6 @@ from datetime import datetime
 from pathlib import Path
 import re
 import os
-import shutil
 
 
 def sanitize_filename(name):
@@ -12,7 +11,6 @@ def sanitize_filename(name):
     return cleaned
 
 
-# All 10 proxies — will try each one until one works
 PROXIES = [
     "http://ciadmdtj:1f2beqnn2it7@31.59.20.176:6754",
     "http://ciadmdtj:1f2beqnn2it7@31.56.127.193:7684",
@@ -26,63 +24,35 @@ PROXIES = [
     "http://ciadmdtj:1f2beqnn2it7@23.229.19.94:8689",
 ]
 
-# Track files created during the run for cleanup
-created_files = []
 
-
-def cleanup():
-    """Delete all downloaded/created files and clear sensitive env variables."""
-    print("\n--- Cleanup started ---")
-
-    # Delete all tracked files
-    for f in created_files:
+def cleanup(resume_path=None):
+    """Delete downloaded resume and screenshots."""
+    print("\n--- Cleanup ---")
+    # Delete resume pdf
+    if resume_path:
         try:
-            path = Path(f)
-            if path.exists():
-                path.unlink()
-                print(f"Deleted file: {path.name}")
-        except Exception as e:
-            print(f"Could not delete {f}: {e}")
-
-    # Delete all .png screenshots
-    for png in Path.cwd().glob("*.png"):
-        try:
-            png.unlink()
-            print(f"Deleted screenshot: {png.name}")
-        except Exception as e:
-            print(f"Could not delete {png}: {e}")
-
-    # Delete all .pdf files
-    for pdf in Path.cwd().glob("*.pdf"):
-        try:
-            pdf.unlink()
-            print(f"Deleted resume: {pdf.name}")
-        except Exception as e:
-            print(f"Could not delete {pdf}: {e}")
-
-    # Clear sensitive environment variables from current process
+            Path(resume_path).unlink(missing_ok=True)
+            print(f"Deleted: {Path(resume_path).name}")
+        except Exception:
+            pass
+    # Delete any leftover pngs or pdfs in cwd
+    for pattern in ["*.png", "*.pdf"]:
+        for f in Path.cwd().glob(pattern):
+            try:
+                f.unlink()
+                print(f"Deleted: {f.name}")
+            except Exception:
+                pass
+    # Clear sensitive env vars
     for var in ["NAUKRI_EMAIL", "NAUKRI_PASSWORD"]:
-        if var in os.environ:
-            os.environ.pop(var)
-            print(f"Cleared env var: {var}")
-
-    # Delete Playwright browser cache to free space
-    playwright_cache = Path.home() / "AppData" / "Local" / "ms-playwright"
-    if playwright_cache.exists():
-        try:
-            shutil.rmtree(playwright_cache)
-            print(f"Deleted Playwright cache: {playwright_cache}")
-        except Exception as e:
-            print(f"Could not delete Playwright cache: {e}")
-
-    print("--- Cleanup done ---\n")
+        os.environ.pop(var, None)
+    print("Cleared env vars.")
+    print("--- Cleanup done ---")
 
 
 def try_login_and_update(proxy_url, email, password, playwright):
-    """Try the full flow with a given proxy. Returns True on success, False on Access Denied."""
-
     host_port = proxy_url.split("@")[-1]
-    print(f"\n--- Trying proxy: {host_port} ---")
+    print(f"Trying proxy: {host_port}")
 
     browser = playwright.chromium.launch(
         headless=True,
@@ -97,6 +67,7 @@ def try_login_and_update(proxy_url, email, password, playwright):
         ]
     )
 
+    resume_path = None
     try:
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
@@ -119,181 +90,124 @@ def try_login_and_update(proxy_url, email, password, playwright):
         """)
 
         # -------------------------------------------------------
-        # STEP 1 — Check if proxy can access Naukri
+        # STEP 1 — Check proxy works (fast: domcontentloaded not networkidle)
         # -------------------------------------------------------
-        print("Navigating to Naukri login page...")
-        page.goto("https://www.naukri.com/nlogin/login", wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(3000)
-
-        print("Login page URL:", page.url)
-        print("Login page title:", page.title())
+        page.goto("https://www.naukri.com/nlogin/login", wait_until="domcontentloaded", timeout=30000)
 
         if "Access Denied" in page.title() or "access denied" in page.title().lower():
-            print(f"Proxy {host_port} blocked by Naukri — trying next proxy...")
-            return False
+            print(f"  Blocked — skipping.")
+            return False, None
+
+        print(f"  Login page loaded: {page.title()}")
 
         # -------------------------------------------------------
-        # STEP 2 — Fill login form
+        # STEP 2 — Login
         # -------------------------------------------------------
-        inputs = page.locator("input").all()
-        print(f"Found {len(inputs)} input fields:")
-        for i, inp in enumerate(inputs):
-            try:
-                print(f"  input[{i}] id='{inp.get_attribute('id')}' type='{inp.get_attribute('type')}' placeholder='{inp.get_attribute('placeholder')}'")
-            except Exception:
-                pass
-
         email_selectors = [
             "#usernameField",
-            "input[placeholder*='Email']",
-            "input[placeholder*='email']",
             "input[type='email']",
             "input[name='username']",
-            "input[id*='username']",
-            "input[id*='email']",
+            "input[placeholder*='email' i]",
+            "input[id*='username' i]",
+            "input[id*='email' i]",
         ]
-
-        email_filled = False
         for selector in email_selectors:
             try:
-                if page.locator(selector).count() > 0:
-                    page.locator(selector).first.fill(email)
-                    print(f"Email entered using: {selector}")
-                    email_filled = True
+                el = page.locator(selector)
+                if el.count() > 0:
+                    el.first.fill(email)
+                    print(f"  Email filled: {selector}")
                     break
             except Exception:
                 continue
-
-        if not email_filled:
-            page.screenshot(path="login_page.png", full_page=True)
-            created_files.append("login_page.png")
-            raise Exception("Could not find email input field. Check login_page.png.")
-
-        page.wait_for_timeout(500)
+        else:
+            raise Exception("Email field not found.")
 
         password_selectors = [
             "#passwordField",
-            "input[placeholder*='Password']",
-            "input[placeholder*='password']",
             "input[type='password']",
             "input[name='password']",
-            "input[id*='password']",
+            "input[placeholder*='password' i]",
+            "input[id*='password' i]",
         ]
-
-        password_filled = False
         for selector in password_selectors:
             try:
-                if page.locator(selector).count() > 0:
-                    page.locator(selector).first.fill(password)
-                    print(f"Password entered using: {selector}")
-                    password_filled = True
+                el = page.locator(selector)
+                if el.count() > 0:
+                    el.first.fill(password)
+                    print(f"  Password filled: {selector}")
                     break
             except Exception:
                 continue
+        else:
+            raise Exception("Password field not found.")
 
-        if not password_filled:
-            page.screenshot(path="login_page.png", full_page=True)
-            created_files.append("login_page.png")
-            raise Exception("Could not find password input field. Check login_page.png.")
+        # Click login and wait for navigation
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
+            for selector in ["button[type='submit']", "button:has-text('Login')", "input[type='submit']"]:
+                try:
+                    el = page.locator(selector)
+                    if el.count() > 0:
+                        el.first.click()
+                        print(f"  Login clicked: {selector}")
+                        break
+                except Exception:
+                    continue
 
-        page.wait_for_timeout(500)
-
-        login_button_selectors = [
-            "button[type='submit']",
-            "button:has-text('Login')",
-            "button:has-text('Sign in')",
-            "input[type='submit']",
-            ".loginButton",
-            "#login-submit",
-        ]
-
-        login_clicked = False
-        for selector in login_button_selectors:
-            try:
-                if page.locator(selector).count() > 0:
-                    page.locator(selector).first.click()
-                    print(f"Login button clicked using: {selector}")
-                    login_clicked = True
-                    break
-            except Exception:
-                continue
-
-        if not login_clicked:
-            raise Exception("Could not find login button.")
-
-        page.wait_for_timeout(8000)
-        page.screenshot(path="after_login.png", full_page=True)
-        created_files.append("after_login.png")
-        print("URL after login:", page.url)
-        print("Title after login:", page.title())
+        print(f"  Post-login URL: {page.url}")
 
         if "nlogin" in page.url or "login" in page.url:
-            raise Exception("Login failed — wrong credentials or captcha. Check after_login.png.")
+            raise Exception("Login failed — bad credentials or captcha.")
 
-        print("Login successful!")
+        print("  Login successful!")
 
         # -------------------------------------------------------
-        # STEP 3 — Go to profile page
+        # STEP 3 — Profile page
         # -------------------------------------------------------
-        print("Opening profile page...")
-        page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(5000)
+        page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded", timeout=30000)
 
-        page.screenshot(path="profile_page.png", full_page=True)
-        created_files.append("profile_page.png")
-        print("Profile URL:", page.url)
-        print("Profile title:", page.title())
+        # Wait only for the specific element we need
+        page.wait_for_selector(".fullname", timeout=30000)
 
-        if "Access Denied" in page.title() or "access denied" in page.title().lower():
-            raise Exception("Access Denied on profile page. Check profile_page.png.")
-
-        if not page.locator(".fullname").count():
-            raise Exception("Profile not loaded. Check profile_page.png.")
-
-        page.wait_for_selector(".fullname", timeout=60000)
         profile_name = page.locator(".fullname").inner_text()
         safe_name = sanitize_filename(profile_name)
-        print(f"Profile name: {profile_name}")
+        print(f"  Profile: {profile_name}")
 
         # -------------------------------------------------------
         # STEP 4 — Download resume
         # -------------------------------------------------------
-        print("Downloading resume...")
-        page.wait_for_selector("[data-title='download-resume']", timeout=60000)
-        with page.expect_download() as download_info:
+        page.wait_for_selector("[data-title='download-resume']", timeout=30000)
+        with page.expect_download(timeout=30000) as download_info:
             page.locator("[data-title='download-resume']").first.click(force=True)
         download = download_info.value
 
         today = datetime.now().strftime("%d_%B_%Y")
         filename = f"{safe_name}_Resume_{today}.pdf"
-        resume_path = Path.cwd() / filename
-        download.save_as(str(resume_path))
-        created_files.append(str(resume_path))
-        print(f"Resume downloaded: {resume_path}")
+        resume_path = str(Path.cwd() / filename)
+        download.save_as(resume_path)
+        print(f"  Resume downloaded: {filename}")
 
         # -------------------------------------------------------
         # STEP 5 — Upload resume
         # -------------------------------------------------------
-        print("Uploading resume...")
-        try:
-            page.set_input_files("#attachCV", str(resume_path))
-            print("Uploaded via #attachCV")
-        except Exception:
+        for selector in ["#attachCV", "#fileUpload"]:
             try:
-                page.set_input_files("#fileUpload", str(resume_path))
-                print("Uploaded via #fileUpload")
-            except Exception as e:
-                raise Exception(f"Resume upload failed: {e}")
+                page.set_input_files(selector, resume_path)
+                print(f"  Uploaded via {selector}")
+                break
+            except Exception:
+                continue
 
-        page.wait_for_timeout(5000)
-        page.screenshot(path="after_upload.png", full_page=True)
-        created_files.append("after_upload.png")
-        print("Resume upload successful!")
+        # Wait for upload confirmation instead of blind sleep
+        page.wait_for_timeout(3000)
+        print("  Upload done!")
 
-        return True
+        return True, resume_path
 
     finally:
         browser.close()
+
+    return False, resume_path
 
 
 def update_naukri_resume():
@@ -301,28 +215,28 @@ def update_naukri_resume():
     password = os.environ.get("NAUKRI_PASSWORD", "")
 
     if not email or not password:
-        raise Exception("NAUKRI_EMAIL and NAUKRI_PASSWORD environment variables must be set.")
+        raise Exception("NAUKRI_EMAIL and NAUKRI_PASSWORD must be set.")
 
+    resume_path = None
     success = False
+
     try:
         with sync_playwright() as p:
             for i, proxy in enumerate(PROXIES):
                 try:
-                    result = try_login_and_update(proxy, email, password, p)
-                    if result:
-                        print(f"\nDone! Succeeded with proxy {i + 1}/{len(PROXIES)}")
-                        success = True
+                    success, resume_path = try_login_and_update(proxy, email, password, p)
+                    if success:
+                        print(f"\nSuccess with proxy {i + 1}/{len(PROXIES)}")
                         break
                 except Exception as e:
-                    print(f"Proxy {i + 1} error: {e}")
+                    print(f"  Proxy {i + 1} failed: {e}")
                     continue
 
         if not success:
-            raise Exception("All 10 proxies failed. Check screenshots for details.")
+            raise Exception("All proxies failed.")
 
     finally:
-        # Always cleanup regardless of success or failure
-        cleanup()
+        cleanup(resume_path)
 
 
 if __name__ == "__main__":
