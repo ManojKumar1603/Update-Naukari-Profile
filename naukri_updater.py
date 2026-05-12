@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import os
+import shutil
 
 
 def sanitize_filename(name):
@@ -11,26 +12,92 @@ def sanitize_filename(name):
     return cleaned
 
 
-def update_naukri_resume():
-    email = os.environ.get("NAUKRI_EMAIL", "")
-    password = os.environ.get("NAUKRI_PASSWORD", "")
+# All 10 proxies — will try each one until one works
+PROXIES = [
+    "http://ciadmdtj:1f2beqnn2it7@31.59.20.176:6754",
+    "http://ciadmdtj:1f2beqnn2it7@31.56.127.193:7684",
+    "http://ciadmdtj:1f2beqnn2it7@45.38.107.97:6014",
+    "http://ciadmdtj:1f2beqnn2it7@107.172.163.27:6543",
+    "http://ciadmdtj:1f2beqnn2it7@198.23.243.226:6361",
+    "http://ciadmdtj:1f2beqnn2it7@216.10.27.159:6837",
+    "http://ciadmdtj:1f2beqnn2it7@142.111.67.146:5611",
+    "http://ciadmdtj:1f2beqnn2it7@191.96.254.138:6185",
+    "http://ciadmdtj:1f2beqnn2it7@31.58.9.4:6077",
+    "http://ciadmdtj:1f2beqnn2it7@23.229.19.94:8689",
+]
 
-    if not email or not password:
-        raise Exception("NAUKRI_EMAIL and NAUKRI_PASSWORD environment variables must be set.")
+# Track files created during the run for cleanup
+created_files = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--window-size=1366,768",
-                "--disable-infobars",
-                "--disable-extensions",
-            ]
-        )
 
+def cleanup():
+    """Delete all downloaded/created files and clear sensitive env variables."""
+    print("\n--- Cleanup started ---")
+
+    # Delete all tracked files
+    for f in created_files:
+        try:
+            path = Path(f)
+            if path.exists():
+                path.unlink()
+                print(f"Deleted file: {path.name}")
+        except Exception as e:
+            print(f"Could not delete {f}: {e}")
+
+    # Delete all .png screenshots
+    for png in Path.cwd().glob("*.png"):
+        try:
+            png.unlink()
+            print(f"Deleted screenshot: {png.name}")
+        except Exception as e:
+            print(f"Could not delete {png}: {e}")
+
+    # Delete all .pdf files
+    for pdf in Path.cwd().glob("*.pdf"):
+        try:
+            pdf.unlink()
+            print(f"Deleted resume: {pdf.name}")
+        except Exception as e:
+            print(f"Could not delete {pdf}: {e}")
+
+    # Clear sensitive environment variables from current process
+    for var in ["NAUKRI_EMAIL", "NAUKRI_PASSWORD"]:
+        if var in os.environ:
+            os.environ.pop(var)
+            print(f"Cleared env var: {var}")
+
+    # Delete Playwright browser cache to free space
+    playwright_cache = Path.home() / "AppData" / "Local" / "ms-playwright"
+    if playwright_cache.exists():
+        try:
+            shutil.rmtree(playwright_cache)
+            print(f"Deleted Playwright cache: {playwright_cache}")
+        except Exception as e:
+            print(f"Could not delete Playwright cache: {e}")
+
+    print("--- Cleanup done ---\n")
+
+
+def try_login_and_update(proxy_url, email, password, playwright):
+    """Try the full flow with a given proxy. Returns True on success, False on Access Denied."""
+
+    host_port = proxy_url.split("@")[-1]
+    print(f"\n--- Trying proxy: {host_port} ---")
+
+    browser = playwright.chromium.launch(
+        headless=True,
+        proxy={"server": proxy_url},
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=1366,768",
+            "--disable-infobars",
+            "--disable-extensions",
+        ]
+    )
+
+    try:
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
             locale="en-IN",
@@ -44,7 +111,6 @@ def update_naukri_resume():
 
         page = context.new_page()
 
-        # Hide automation signals
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
@@ -53,26 +119,30 @@ def update_naukri_resume():
         """)
 
         # -------------------------------------------------------
-        # STEP 1 — Login
+        # STEP 1 — Check if proxy can access Naukri
         # -------------------------------------------------------
         print("Navigating to Naukri login page...")
         page.goto("https://www.naukri.com/nlogin/login", wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(3000)
 
-        page.screenshot(path="login_page.png", full_page=True)
         print("Login page URL:", page.url)
         print("Login page title:", page.title())
 
-        # Print all input fields found on page for debugging
+        if "Access Denied" in page.title() or "access denied" in page.title().lower():
+            print(f"Proxy {host_port} blocked by Naukri — trying next proxy...")
+            return False
+
+        # -------------------------------------------------------
+        # STEP 2 — Fill login form
+        # -------------------------------------------------------
         inputs = page.locator("input").all()
-        print(f"Found {len(inputs)} input fields on login page:")
+        print(f"Found {len(inputs)} input fields:")
         for i, inp in enumerate(inputs):
             try:
-                print(f"  input[{i}] id='{inp.get_attribute('id')}' name='{inp.get_attribute('name')}' type='{inp.get_attribute('type')}' placeholder='{inp.get_attribute('placeholder')}'")
+                print(f"  input[{i}] id='{inp.get_attribute('id')}' type='{inp.get_attribute('type')}' placeholder='{inp.get_attribute('placeholder')}'")
             except Exception:
                 pass
 
-        # Try multiple selectors for email field
         email_selectors = [
             "#usernameField",
             "input[placeholder*='Email']",
@@ -88,19 +158,19 @@ def update_naukri_resume():
             try:
                 if page.locator(selector).count() > 0:
                     page.locator(selector).first.fill(email)
-                    print(f"Email entered using selector: {selector}")
+                    print(f"Email entered using: {selector}")
                     email_filled = True
                     break
             except Exception:
                 continue
 
         if not email_filled:
-            page.screenshot(path="login_failed.png", full_page=True)
-            raise Exception("Could not find email input field. Check login_page.png for the actual page.")
+            page.screenshot(path="login_page.png", full_page=True)
+            created_files.append("login_page.png")
+            raise Exception("Could not find email input field. Check login_page.png.")
 
         page.wait_for_timeout(500)
 
-        # Try multiple selectors for password field
         password_selectors = [
             "#passwordField",
             "input[placeholder*='Password']",
@@ -115,22 +185,19 @@ def update_naukri_resume():
             try:
                 if page.locator(selector).count() > 0:
                     page.locator(selector).first.fill(password)
-                    print(f"Password entered using selector: {selector}")
+                    print(f"Password entered using: {selector}")
                     password_filled = True
                     break
             except Exception:
                 continue
 
         if not password_filled:
-            page.screenshot(path="login_failed.png", full_page=True)
-            raise Exception("Could not find password input field. Check login_page.png for the actual page.")
+            page.screenshot(path="login_page.png", full_page=True)
+            created_files.append("login_page.png")
+            raise Exception("Could not find password input field. Check login_page.png.")
 
         page.wait_for_timeout(500)
 
-        # Take screenshot before clicking login
-        page.screenshot(path="before_login_click.png", full_page=True)
-
-        # Try multiple selectors for login button
         login_button_selectors = [
             "button[type='submit']",
             "button:has-text('Login')",
@@ -145,7 +212,7 @@ def update_naukri_resume():
             try:
                 if page.locator(selector).count() > 0:
                     page.locator(selector).first.click()
-                    print(f"Login button clicked using selector: {selector}")
+                    print(f"Login button clicked using: {selector}")
                     login_clicked = True
                     break
             except Exception:
@@ -154,26 +221,26 @@ def update_naukri_resume():
         if not login_clicked:
             raise Exception("Could not find login button.")
 
-        # Wait for redirect after login
         page.wait_for_timeout(8000)
         page.screenshot(path="after_login.png", full_page=True)
+        created_files.append("after_login.png")
         print("URL after login:", page.url)
         print("Title after login:", page.title())
 
-        # Detect login failure
         if "nlogin" in page.url or "login" in page.url:
-            raise Exception("Login failed — wrong credentials or captcha appeared. Check after_login.png.")
+            raise Exception("Login failed — wrong credentials or captcha. Check after_login.png.")
 
         print("Login successful!")
 
         # -------------------------------------------------------
-        # STEP 2 — Go to profile page
+        # STEP 3 — Go to profile page
         # -------------------------------------------------------
         print("Opening profile page...")
         page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
         page.screenshot(path="profile_page.png", full_page=True)
+        created_files.append("profile_page.png")
         print("Profile URL:", page.url)
         print("Profile title:", page.title())
 
@@ -181,16 +248,15 @@ def update_naukri_resume():
             raise Exception("Access Denied on profile page. Check profile_page.png.")
 
         if not page.locator(".fullname").count():
-            raise Exception("Profile not loaded — .fullname element not found. Check profile_page.png.")
+            raise Exception("Profile not loaded. Check profile_page.png.")
 
-        print("Fetching profile name...")
         page.wait_for_selector(".fullname", timeout=60000)
         profile_name = page.locator(".fullname").inner_text()
         safe_name = sanitize_filename(profile_name)
         print(f"Profile name: {profile_name}")
 
         # -------------------------------------------------------
-        # STEP 3 — Download resume
+        # STEP 4 — Download resume
         # -------------------------------------------------------
         print("Downloading resume...")
         page.wait_for_selector("[data-title='download-resume']", timeout=60000)
@@ -202,10 +268,11 @@ def update_naukri_resume():
         filename = f"{safe_name}_Resume_{today}.pdf"
         resume_path = Path.cwd() / filename
         download.save_as(str(resume_path))
+        created_files.append(str(resume_path))
         print(f"Resume downloaded: {resume_path}")
 
         # -------------------------------------------------------
-        # STEP 4 — Upload resume
+        # STEP 5 — Upload resume
         # -------------------------------------------------------
         print("Uploading resume...")
         try:
@@ -216,15 +283,46 @@ def update_naukri_resume():
                 page.set_input_files("#fileUpload", str(resume_path))
                 print("Uploaded via #fileUpload")
             except Exception as e:
-                raise Exception(f"Resume upload failed — could not find upload input: {e}")
+                raise Exception(f"Resume upload failed: {e}")
 
         page.wait_for_timeout(5000)
-
         page.screenshot(path="after_upload.png", full_page=True)
-        print("Resume upload successful. Screenshot saved: after_upload.png")
+        created_files.append("after_upload.png")
+        print("Resume upload successful!")
 
+        return True
+
+    finally:
         browser.close()
-        print("Done!")
+
+
+def update_naukri_resume():
+    email = os.environ.get("NAUKRI_EMAIL", "")
+    password = os.environ.get("NAUKRI_PASSWORD", "")
+
+    if not email or not password:
+        raise Exception("NAUKRI_EMAIL and NAUKRI_PASSWORD environment variables must be set.")
+
+    success = False
+    try:
+        with sync_playwright() as p:
+            for i, proxy in enumerate(PROXIES):
+                try:
+                    result = try_login_and_update(proxy, email, password, p)
+                    if result:
+                        print(f"\nDone! Succeeded with proxy {i + 1}/{len(PROXIES)}")
+                        success = True
+                        break
+                except Exception as e:
+                    print(f"Proxy {i + 1} error: {e}")
+                    continue
+
+        if not success:
+            raise Exception("All 10 proxies failed. Check screenshots for details.")
+
+    finally:
+        # Always cleanup regardless of success or failure
+        cleanup()
 
 
 if __name__ == "__main__":
