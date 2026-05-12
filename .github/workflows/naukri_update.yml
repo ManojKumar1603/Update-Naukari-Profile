@@ -24,21 +24,15 @@ jobs:
           python -m pip install playwright==1.51.0
           python -m playwright install chromium
 
-      # 🔐 Recreate auth.json from secret
-      - name: Create auth.json
-        run: |
-          $bytes = [System.Convert]::FromBase64String("$env:AUTH_JSON")
-          [System.IO.File]::WriteAllBytes("auth.json", $bytes)
-        shell: pwsh
-        env:
-          AUTH_JSON: ${{ secrets.AUTH_JSON }}
-
       - name: Run Naukri updater
         run: |
           python naukri_updater.py
         shell: pwsh
+        env:
+          NAUKRI_EMAIL: ${{ secrets.NAUKRI_EMAIL }}
+          NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
 
-      # 📸 Always upload screenshots (success + failure)
+      # Always upload screenshots (success + failure)
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4

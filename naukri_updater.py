@@ -2,6 +2,7 @@ from playwright.sync_api import sync_playwright
 from datetime import datetime
 from pathlib import Path
 import re
+import os
 
 
 def sanitize_filename(name):
@@ -11,6 +12,12 @@ def sanitize_filename(name):
 
 
 def update_naukri_resume():
+    email = os.environ.get("NAUKRI_EMAIL", "")
+    password = os.environ.get("NAUKRI_PASSWORD", "")
+
+    if not email or not password:
+        raise Exception("NAUKRI_EMAIL and NAUKRI_PASSWORD environment variables must be set.")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -19,16 +26,12 @@ def update_naukri_resume():
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
                 "--window-size=1366,768",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
                 "--disable-infobars",
                 "--disable-extensions",
             ]
         )
 
-        # Load saved session (no OTP)
         context = browser.new_context(
-            storage_state="auth.json",
             viewport={"width": 1366, "height": 768},
             locale="en-IN",
             timezone_id="Asia/Kolkata",
@@ -49,29 +52,54 @@ def update_naukri_resume():
             window.chrome = { runtime: {} };
         """)
 
-        # Small human-like pause before navigating
-        page.wait_for_timeout(2000)
+        # -------------------------------------------------------
+        # STEP 1 — Login fresh
+        # -------------------------------------------------------
+        print("Navigating to Naukri login page...")
+        page.goto("https://www.naukri.com/nlogin/login", wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
 
+        page.screenshot(path="login_page.png", full_page=True)
+        print("Current URL:", page.url)
+
+        print("Entering email...")
+        page.locator("#usernameField").fill(email)
+        page.wait_for_timeout(500)
+
+        print("Entering password...")
+        page.locator("#passwordField").fill(password)
+        page.wait_for_timeout(500)
+
+        print("Clicking login button...")
+        page.locator("button[type='submit']").click()
+
+        # Wait for redirect after login
+        page.wait_for_timeout(6000)
+        page.screenshot(path="after_login.png", full_page=True)
+        print("URL after login:", page.url)
+
+        # Detect login failure
+        if "nlogin" in page.url or "login" in page.url:
+            raise Exception("Login failed — wrong email/password or Naukri is showing a captcha. Check after_login.png.")
+
+        print("Login successful!")
+
+        # -------------------------------------------------------
+        # STEP 2 — Go to profile page
+        # -------------------------------------------------------
         print("Opening profile page...")
         page.goto("https://www.naukri.com/mnjuser/profile", wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
 
-        # Debug screenshot always saved
-        page.screenshot(path="debug_page.png", full_page=True)
+        page.screenshot(path="profile_page.png", full_page=True)
         print("Current URL:", page.url)
         print("Page title:", page.title())
 
-        # Detect login failure — redirected to login page
-        if "login" in page.url or "nlogin" in page.url:
-            raise Exception("Session invalid — redirected to login. Regenerate auth.json.")
-
-        # Detect access denied
         if "Access Denied" in page.title() or "access denied" in page.title().lower():
-            raise Exception("Access Denied — Naukri blocked the request. Regenerate auth.json or check bot detection fixes.")
+            raise Exception("Access Denied on profile page. Check profile_page.png.")
 
-        # Check if profile element exists
         if not page.locator(".fullname").count():
-            raise Exception("Not logged in — profile not loaded. Regenerate auth.json.")
+            raise Exception("Profile not loaded — .fullname element not found. Check profile_page.png.")
 
         print("Fetching profile name...")
         page.wait_for_selector(".fullname", timeout=60000)
@@ -79,6 +107,9 @@ def update_naukri_resume():
         safe_name = sanitize_filename(profile_name)
         print(f"Profile name: {profile_name}")
 
+        # -------------------------------------------------------
+        # STEP 3 — Download resume
+        # -------------------------------------------------------
         print("Downloading resume...")
         page.wait_for_selector("[data-title='download-resume']", timeout=60000)
         with page.expect_download() as download_info:
@@ -91,6 +122,9 @@ def update_naukri_resume():
         download.save_as(str(resume_path))
         print(f"Resume downloaded: {resume_path}")
 
+        # -------------------------------------------------------
+        # STEP 4 — Upload resume (triggers "profile updated" on Naukri)
+        # -------------------------------------------------------
         print("Uploading resume...")
         try:
             page.set_input_files("#attachCV", str(resume_path))
@@ -102,13 +136,10 @@ def update_naukri_resume():
             except Exception as e:
                 raise Exception(f"Resume upload failed — could not find upload input: {e}")
 
-        # Wait for upload to complete
         page.wait_for_timeout(5000)
 
-        # Screenshot after upload
-        screenshot_path = str(Path.cwd() / "after_upload.png")
-        page.screenshot(path=screenshot_path, full_page=True)
-        print(f"Resume upload successful. Screenshot saved: {screenshot_path}")
+        page.screenshot(path="after_upload.png", full_page=True)
+        print("Resume upload successful. Screenshot saved: after_upload.png")
 
         browser.close()
         print("Done!")
